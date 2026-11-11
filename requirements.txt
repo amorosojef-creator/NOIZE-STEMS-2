@@ -1,0 +1,11 @@
+# NOIZE runtime dependencies (Python 3.11, Windows 10/11 x64).
+# Windows PyPI wheels of torch/torchaudio are CPU-only => this file is the CPU-only install path.
+PySide6==6.8.1
+numpy==1.26.4
+scipy==1.13.1
+soundfile==0.12.1
+psutil==6.1.0
+imageio-ffmpeg==0.5.1
+torch==2.4.1
+torchaudio==2.4.1
+demucs==4.0.1
