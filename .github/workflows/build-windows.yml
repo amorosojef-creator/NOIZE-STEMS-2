@@ -1,1 +1,91 @@
 name: Build NOIZE for Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      real_model_test:
+        description: "Also download htdemucs weights and run the real-model smoke test"
+        type: boolean
+        default: false
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies (CPU-only PyTorch from PyPI)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Unit tests (mocked/fake-model; no real inference)
+        env:
+          QT_QPA_PLATFORM: offscreen
+          NOIZE_NO_AUDIO: "1"
+        run: python -m pytest -q -m "not realmodel"
+
+      - name: Optional real-model smoke test (downloads ~80 MB htdemucs weights)
+        if: ${{ github.event.inputs.real_model_test == 'true' }}
+        env:
+          QT_QPA_PLATFORM: offscreen
+          NOIZE_NO_AUDIO: "1"
+          NOIZE_REAL_MODEL: "1"
+          NOIZE_HOME: ${{ runner.temp }}\noize-home
+        run: |
+          python scripts/install_model.py htdemucs --yes
+          python -m pytest -q -m realmodel -s
+
+      - name: Build with PyInstaller (onedir)
+        run: pyinstaller noize.spec --noconfirm
+
+      - name: Verify executable exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/NOIZE/NOIZE.exe")) { Write-Error "dist/NOIZE/NOIZE.exe missing"; exit 1 }
+          Get-Item dist/NOIZE/NOIZE.exe | Format-List Name, Length
+          if (-not (Test-Path "dist/NOIZE/_internal")) { Write-Error "_internal runtime folder missing"; exit 1 }
+
+      - name: Packaged self-test (imports torch/demucs/Qt from the built app)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist/NOIZE/NOIZE.exe" -ArgumentList "--selftest","--selftest-out","selftest.txt" -Wait -PassThru
+          Get-Content selftest.txt
+          if ($p.ExitCode -ne 0) { Write-Error "Self-test failed (exit $($p.ExitCode))"; exit 1 }
+
+      - name: Create portable ZIP
+        shell: pwsh
+        run: |
+          Copy-Item README.md dist/NOIZE/README.md
+          Compress-Archive -Path dist/NOIZE -DestinationPath NOIZE-portable-win64.zip -CompressionLevel Optimal
+          Get-Item NOIZE-portable-win64.zip | Format-List Name, Length
+
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          choco install innosetup -y --no-progress
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\noize.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NOIZE-portable-win64
+          path: NOIZE-portable-win64.zip
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NOIZE-installer-win64
+          path: dist/NOIZE-Setup-*.exe
+          if-no-files-found: warn
